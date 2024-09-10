@@ -1,0 +1,7 @@
+pandas
+numpy
+pytest
+plotly
+matlibplot
+mlflow
+scikit-learn
