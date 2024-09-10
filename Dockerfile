@@ -1,18 +1,14 @@
 # Base image
-FROM python:3.11
+FROM python:3.9
 
-# Set the working directory inside the container
+# Set working directory
 WORKDIR /app
 
-# Copy all project files to the container
+# Copy files
 COPY . /app
 
 # Install dependencies
-RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
 
-# Expose the port for Jupyter Notebook 
-EXPOSE 8888
-
-
-CMD ["jupyter", "notebook", "--ip=0.0.0.0", "--allow-root", "--no-browser"]
+# Run application
+CMD ["python", "scripts/satisfaction_analysis.py"]
