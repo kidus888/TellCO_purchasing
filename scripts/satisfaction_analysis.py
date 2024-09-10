@@ -1,65 +1,95 @@
-import numpy as n
-from sklearn.metrics import euclidean_distances
+import numpy as np
+from sklearn.metrics.pairwise import euclidean_distances
+from scripts.user_engagement_analysis import perform_kmeans_clustering, compute_cluster_stats
+from scripts.experience_analytics import preprocess_data, perform_kmeans_clustering as experience_clustering
+
+def assign_scores(user_data):
+    # Get user data for engagement and experience
+    engagement_data = preprocess_data(user_data)
+    experience_data = preprocess_data(user_data)
+
+    # Engagement clustering
+    engagement_cluster_centers, engagement_labels = perform_kmeans_clustering(engagement_data)
+    less_engaged_cluster_center = engagement_cluster_centers[0]  # Assume cluster 0 is less engaged
+
+    # Experience clustering
+    experience_cluster_centers, experience_labels = experience_clustering(experience_data)
+    worst_experience_cluster_center = experience_cluster_centers[0]  # Assume cluster 0 is worst experience
+
+    # Calculate Euclidean distance (Engagement Score)
+    user_engagement_scores = euclidean_distances(engagement_data, [less_engaged_cluster_center]).flatten()
+
+    # Calculate Euclidean distance (Experience Score)
+    user_experience_scores = euclidean_distances(experience_data, [worst_experience_cluster_center]).flatten()
+
+    # Combine into a DataFrame for further steps
+    user_scores = user_data.copy()
+    user_scores['Engagement Score'] = user_engagement_scores
+    user_scores['Experience Score'] = user_experience_scores
+
+    return user_scores
+
+def calculate_satisfaction_score(user_scores):
+    # Satisfaction score is the average of both engagement and experience scores
+    user_scores['Satisfaction Score'] = (user_scores['Engagement Score'] + user_scores['Experience Score']) / 2
+    
+    # Sort by Satisfaction Score and get top 10 customers
+    top_10_customers = user_scores.sort_values(by='Satisfaction Score', ascending=True).head(10)
+    
+    return top_10_customers
+
+
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
-from user_engagement_analysis import perform_kmeans_clustering as engagement_clustering
-from experience_analytics import perform_kmeans_clustering as experience_clustering
 
-def assign_scores(df):
-    # Perform k-means clustering for engagement
-    engagement_clusters, engagement_model = engagement_clustering(df[['Engagement_Feature1', 'Engagement_Feature2']], k=3)
-    experience_clusters, experience_model = experience_clustering(df[['Experience_Feature1', 'Experience_Feature2']], k=3)
+def build_regression_model(user_scores):
+    # Use engagement and experience scores as features
+    X = user_scores[['Engagement Score', 'Experience Score']]
+    y = user_scores['Satisfaction Score']
 
-    # Identify the least engaged and worst experience clusters
-    least_engaged_cluster = engagement_clusters['cluster'].value_counts().idxmax()
-    worst_experience_cluster = experience_clusters['cluster'].value_counts().idxmin()
-
-    # Compute engagement and experience scores based on Euclidean distance
-    df['engagement_score'] = euclidean_distances(df[['Engagement_Feature1', 'Engagement_Feature2']], 
-                                                  engagement_model.cluster_centers_[least_engaged_cluster])
-    df['experience_score'] = euclidean_distances(df[['Experience_Feature1', 'Experience_Feature2']], 
-                                                  experience_model.cluster_centers_[worst_experience_cluster])
-    
-    return df
-
-def compute_satisfaction_score(df):
-    # Average engagement and experience scores to get satisfaction score
-    df['satisfaction_score'] = (df['engagement_score'] + df['experience_score']) / 2
-    return df
-
-def top_satisfied_customers(df, top_n=10):
-    # Sort customers by satisfaction score and get top 10
-    top_customers = df.nlargest(top_n, 'satisfaction_score')
-    return top_customers
-
-def predict_satisfaction(df):
-    X = df[['engagement_score', 'experience_score']]
-    y = df['satisfaction_score']
-    
-    # Train-test split
+    # Split the data into train and test sets
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
-    # Train regression model
+
+    # Build a linear regression model
     model = LinearRegression()
     model.fit(X_train, y_train)
+
+    # Predict and calculate performance metrics
+    y_pred = model.predict(X_test)
+    mse = mean_squared_error(y_test, y_pred)
+
+    print(f"Mean Squared Error: {mse}")
     
-    # Predictions and evaluation
-    predictions = model.predict(X_test)
-    mse = mean_squared_error(y_test, predictions)
-    
-    print(f'Mean Squared Error: {mse}')
     return model
 
-def kmeans_on_scores(df, k=2):
-    from sklearn.cluster import KMeans
-    model = KMeans(n_clusters=k, random_state=42)
-    df['score_cluster'] = model.fit_predict(df[['engagement_score', 'experience_score']])
-    return df
+from sklearn.cluster import KMeans
 
-def aggregate_scores_by_cluster(df):
-    cluster_aggregates = df.groupby('score_cluster').agg({
-        'satisfaction_score': 'mean',
-        'experience_score': 'mean'
-    })
-    return cluster_aggregates
+def cluster_scores(user_scores):
+    kmeans = KMeans(n_clusters=2, random_state=42)
+    user_scores['Cluster'] = kmeans.fit_predict(user_scores[['Engagement Score', 'Experience Score']])
+    
+    return user_scores
+
+def aggregate_per_cluster(user_scores):
+    cluster_agg = user_scores.groupby('Cluster').agg({
+        'Satisfaction Score': 'mean',
+        'Experience Score': 'mean'
+    }).reset_index()
+
+    return cluster_agg
+
+
+import mlflow
+
+def track_model(model):
+    mlflow.set_tracking_uri("http://localhost:5000")
+    
+    with mlflow.start_run():
+        mlflow.log_param("model", "LinearRegression")
+        mlflow.log_metric("MSE", mean_squared_error(y_test, y_pred))
+        
+        # Track artifacts, e.g., model or plots
+        mlflow.sklearn.log_model(model, "model")
+
+    print("Model tracked successfully.")
